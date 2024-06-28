@@ -17,8 +17,17 @@ use std::io::Read;
 use alloy_primitives::U256;
 use alloy_sol_types::SolValue;
 use risc0_zkvm::guest::env;
+use risc0_zkvm::serde;
+
+// Hack to get methods included from build step in /methods
+// include!(env!("METHODS"));
+include!(concat!(env!("OUT_DIR"), "/methods.rs"));
 
 fn main() {
+    // Verify Local proof's receipt remotely
+    let local_committed: (u64, u64, u64) = env::read();
+    env::verify(POWER_MODULUS_ID, &serde::to_vec(&local_committed).unwrap());
+
     // Read the input data for this application.
     let mut input_bytes = Vec::<u8>::new();
     env::stdin().read_to_end(&mut input_bytes).unwrap();

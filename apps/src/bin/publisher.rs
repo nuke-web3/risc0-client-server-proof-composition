@@ -22,8 +22,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use ethers::prelude::*;
 use methods::IS_EVEN_ELF;
+use methods::POWER_MODULUS_ELF;
 use risc0_ethereum_contracts::groth16;
-use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts, VerifierContext};
+use risc0_zkvm::{default_prover, ExecutorEnv, LocalProver, Prover, ProverOpts, VerifierContext};
 
 // `IEvenNumber` interface automatically generated via the alloy `sol!` macro.
 sol! {
@@ -93,9 +94,13 @@ struct Args {
     #[clap(long)]
     contract: String,
 
-    /// The input to provide to the guest binary
+    /// The input to provide to the LOCAL guest binary
     #[clap(short, long)]
-    input: U256,
+    n: u64,
+    #[clap(short, long)]
+    e: u64,
+    #[clap(short, long)]
+    x: u64,
 }
 
 fn main() -> Result<()> {
@@ -111,15 +116,32 @@ fn main() -> Result<()> {
         &args.contract,
     )?;
 
+    // --------------- LOCAL CLIENT-SIDE ---------------
+
+    let local_input = (args.n, args.e, args.x);
+    let local_env = ExecutorEnv::builder().write(&local_input)?.build()?;
+
+    //  Explicitly prove using private inputs
+    let local_receipt = LocalProver::new("local")
+        .prove(local_env, POWER_MODULUS_ELF)?
+        .receipt;
+
+    // --------------- REMOTE SERVER-SIDE ---------------
+
     // ABI encode input: Before sending the proof request to the Bonsai proving service,
     // the input number is ABI-encoded to match the format expected by the guest code running in the zkVM.
-    let input = args.input.abi_encode();
+    let local_res: (u64, u64, u64) = local_receipt.journal.decode()?;
+    let remote_input = local_res.2.abi_encode();
 
-    let env = ExecutorEnv::builder().write_slice(&input).build()?;
+    let remote_env = ExecutorEnv::builder()
+        .add_assumption(local_receipt)
+        .write_slice(&remote_input)
+        .build()?;
 
-    let receipt = default_prover()
+    // As we `export` the BONSAI env vars, default will use Boansi to prove:
+    let remote_receipt = default_prover()
         .prove_with_ctx(
-            env,
+            remote_env,
             &VerifierContext::default(),
             IS_EVEN_ELF,
             &ProverOpts::groth16(),
@@ -127,10 +149,10 @@ fn main() -> Result<()> {
         .receipt;
 
     // Encode the seal with the selector.
-    let seal = groth16::encode(receipt.inner.groth16()?.seal.clone())?;
+    let seal = groth16::encode(remote_receipt.inner.groth16()?.seal.clone())?;
 
     // Extract the journal from the receipt.
-    let journal = receipt.journal.bytes.clone();
+    let journal = remote_receipt.journal.bytes.clone();
 
     // Decode Journal: Upon receiving the proof, the application decodes the journal to extract
     // the verified number. This ensures that the number being submitted to the blockchain matches
