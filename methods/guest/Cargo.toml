@@ -7,6 +7,10 @@ edition = "2021"
 name = "is-even"
 path = "src/bin/is_even.rs"
 
+[[bin]]
+name = "power-modulus"
+path = "src/bin/power_modulus.rs"
+
 [workspace]
 
 [dependencies]
